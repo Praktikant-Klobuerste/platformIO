@@ -5,9 +5,9 @@ on:
     types: [labeled]
 
 permissions:
-  contents: write       # für Branch-Erstellung
-  issues: write         # für Kommentare unter dem Issue
-  pull-requests: write  # nur nötig, falls PR-Erstellung aktiviert wird
+  contents: write       # Branch anlegen
+  issues: write         # Kommentar im Issue
+  pull-requests: write  # nur nötig, falls du die PR-Erstellung unten aktivierst
 
 jobs:
   create_issue_branch:
@@ -18,42 +18,40 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // --- Guard: nur bei Label "ready for dev" (case-insensitive)
             const issue = context.payload.issue;
             const repo  = context.repo;
-            const labelName = context.payload.label?.name?.toLowerCase();
-
-            // 1) Nur reagieren, wenn das Label "ready for dev" ist
-            if (labelName !== 'ready for dev') {
-              core.info(`Label "${labelName}" ist nicht "ready for dev" – überspringe.`);
+            const labelName = (context.payload.label?.name || "").toLowerCase();
+            if (labelName !== "ready for dev") {
+              console.log(`Label "${labelName}" ist nicht "ready for dev" – überspringe.`);
               return;
             }
 
-            // 2) Branch-Name bauen: issue-<nr>-<slug>
+            // --- Branch-Name bauen: issue-<nr>-<slug>
             function slugify(title) {
               return title
-                .toLowerCase()
-                .trim()
-                .replace(/ä/g, 'ae')
-                .replace(/ö/g, 'oe')
-                .replace(/ü/g, 'ue')
-                .replace(/ß/g, 'ss')
-                .replace(/[^a-z0-9]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .slice(0, 60);
+                // deutsche Umlaute zuerst "umschreiben"
+                .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+                // diakritische Zeichen entfernen
+                .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+                .toLowerCase().trim()
+                .replace(/[^a-z0-9]+/g, "-")   // alles Nicht-Alphanum durch "-"
+                .replace(/^-+|-+$/g, "")       // Leading/Trailing "-" entfernen
+                .slice(0, 60);                 // Länge begrenzen
             }
 
-            const slug = slugify(issue.title);
+            const slug = slugify(issue.title || "");
             const branchName = `issue-${issue.number}${slug ? '-' + slug : ''}`;
             const refName = `heads/${branchName}`;
 
-            // 3) Default-Branch ermitteln
+            // --- Default-Branch ermitteln (z. B. main/develop)
             const { data: repoData } = await github.rest.repos.get({
               owner: repo.owner,
               repo: repo.repo
             });
             const baseBranch = repoData.default_branch;
 
-            // 4) SHA des Base-Branches holen
+            // --- SHA des Base-Branches holen
             const { data: baseRef } = await github.rest.git.getRef({
               owner: repo.owner,
               repo: repo.repo,
@@ -61,20 +59,24 @@ jobs:
             });
             const baseSha = baseRef.object.sha;
 
-            // 5) Prüfen, ob Branch schon existiert
-            let exists = false;
+            // --- Prüfen, ob der Ziel-Branch bereits existiert
+            let exists = true;
             try {
               await github.rest.git.getRef({
                 owner: repo.owner,
                 repo: repo.repo,
                 ref: refName
               });
-              exists = true;
-            } catch (err) {
-              if (err.status !== 404) throw err;
+              console.log(`Branch ${branchName} existiert bereits.`);
+            } catch (e) {
+              if (e.status === 404) {
+                exists = false;
+              } else {
+                throw e;
+              }
             }
 
-            // 6) Branch anlegen (wenn noch nicht vorhanden)
+            // --- Branch anlegen, falls nicht vorhanden
             if (!exists) {
               await github.rest.git.createRef({
                 owner: repo.owner,
@@ -82,12 +84,10 @@ jobs:
                 ref: `refs/${refName}`,
                 sha: baseSha
               });
-              core.info(`Branch ${branchName} wurde erstellt.`);
-            } else {
-              core.info(`Branch ${branchName} existiert bereits.`);
+              console.log(`Branch ${branchName} wurde von ${baseBranch} erstellt.`);
             }
 
-            // 7) Kommentar im Issue
+            // --- Kommentar im Issue mit Checkout-Anleitung
             const comment = exists
               ? `🔁 Es existiert bereits ein Branch für dieses Issue:\n\n\`${branchName}\`\n\n**Checkout:**\n\`\`\`bash\ngit fetch origin\ngit switch ${branchName} || git checkout -b ${branchName} origin/${branchName}\n\`\`\`\n`
               : `🌱 Branch erstellt: \`${branchName}\`\n\n**Checkout lokal:**\n\`\`\`bash\ngit fetch origin\ngit checkout -b ${branchName} origin/${branchName}\n# oder mit neuerem Git:\n# git switch --track -c ${branchName} origin/${branchName}\n\`\`\`\n\n**Basis:** \`${baseBranch}\``;
@@ -99,7 +99,7 @@ jobs:
               body: comment
             });
 
-            // 8) Optional: Draft-PR automatisch erstellen
+            // --- Optional: Draft-PR automatisch erstellen (auskommentiert lassen/entfernen, wenn nicht gewünscht)
             /*
             if (!exists) {
               await github.rest.pulls.create({
@@ -111,5 +111,6 @@ jobs:
                 draft: true,
                 body: `Automatisch erstellt für #${issue.number}.`
               });
+              console.log(`Draft-PR für ${branchName} erstellt.`);
             }
             */
