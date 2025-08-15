@@ -5,9 +5,9 @@ on:
     types: [labeled]
 
 permissions:
-  contents: write       # für das Erstellen des Branches
+  contents: write       # für Branch-Erstellung
   issues: write         # für Kommentare unter dem Issue
-  pull-requests: write  # falls du optional Draft-PRs erstellen willst
+  pull-requests: write  # nur nötig, falls PR-Erstellung aktiviert wird
 
 jobs:
   create_issue_branch:
@@ -18,7 +18,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const core = require('@actions/core');
             const issue = context.payload.issue;
             const repo  = context.repo;
             const labelName = context.payload.label?.name?.toLowerCase();
