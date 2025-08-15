@@ -1,0 +1,116 @@
+name: Create branch when "ready for dev" label is added
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write       # für das Erstellen des Branches
+  issues: write         # für Kommentare unter dem Issue
+  pull-requests: write  # falls du optional Draft-PRs erstellen willst
+
+jobs:
+  create_issue_branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create branch from issue title (only if label matches)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const core = require('@actions/core');
+            const issue = context.payload.issue;
+            const repo  = context.repo;
+            const labelName = context.payload.label?.name?.toLowerCase();
+
+            // 1) Nur reagieren, wenn das Label "ready for dev" ist
+            if (labelName !== 'ready for dev') {
+              core.info(`Label "${labelName}" ist nicht "ready for dev" – überspringe.`);
+              return;
+            }
+
+            // 2) Branch-Name bauen: issue-<nr>-<slug>
+            function slugify(title) {
+              return title
+                .toLowerCase()
+                .trim()
+                .replace(/ä/g, 'ae')
+                .replace(/ö/g, 'oe')
+                .replace(/ü/g, 'ue')
+                .replace(/ß/g, 'ss')
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .slice(0, 60);
+            }
+
+            const slug = slugify(issue.title);
+            const branchName = `issue-${issue.number}${slug ? '-' + slug : ''}`;
+            const refName = `heads/${branchName}`;
+
+            // 3) Default-Branch ermitteln
+            const { data: repoData } = await github.rest.repos.get({
+              owner: repo.owner,
+              repo: repo.repo
+            });
+            const baseBranch = repoData.default_branch;
+
+            // 4) SHA des Base-Branches holen
+            const { data: baseRef } = await github.rest.git.getRef({
+              owner: repo.owner,
+              repo: repo.repo,
+              ref: `heads/${baseBranch}`
+            });
+            const baseSha = baseRef.object.sha;
+
+            // 5) Prüfen, ob Branch schon existiert
+            let exists = false;
+            try {
+              await github.rest.git.getRef({
+                owner: repo.owner,
+                repo: repo.repo,
+                ref: refName
+              });
+              exists = true;
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+
+            // 6) Branch anlegen (wenn noch nicht vorhanden)
+            if (!exists) {
+              await github.rest.git.createRef({
+                owner: repo.owner,
+                repo: repo.repo,
+                ref: `refs/${refName}`,
+                sha: baseSha
+              });
+              core.info(`Branch ${branchName} wurde erstellt.`);
+            } else {
+              core.info(`Branch ${branchName} existiert bereits.`);
+            }
+
+            // 7) Kommentar im Issue
+            const comment = exists
+              ? `🔁 Es existiert bereits ein Branch für dieses Issue:\n\n\`${branchName}\`\n\n**Checkout:**\n\`\`\`bash\ngit fetch origin\ngit switch ${branchName} || git checkout -b ${branchName} origin/${branchName}\n\`\`\`\n`
+              : `🌱 Branch erstellt: \`${branchName}\`\n\n**Checkout lokal:**\n\`\`\`bash\ngit fetch origin\ngit checkout -b ${branchName} origin/${branchName}\n# oder mit neuerem Git:\n# git switch --track -c ${branchName} origin/${branchName}\n\`\`\`\n\n**Basis:** \`${baseBranch}\``;
+
+            await github.rest.issues.createComment({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: issue.number,
+              body: comment
+            });
+
+            // 8) Optional: Draft-PR automatisch erstellen
+            /*
+            if (!exists) {
+              await github.rest.pulls.create({
+                owner: repo.owner,
+                repo: repo.repo,
+                title: `[WIP] ${issue.title}`,
+                head: branchName,
+                base: baseBranch,
+                draft: true,
+                body: `Automatisch erstellt für #${issue.number}.`
+              });
+            }
+            */
