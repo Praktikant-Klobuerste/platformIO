@@ -11,7 +11,7 @@ void setup() {
 
 void loop() {
   digitalWrite(LED_BUILTIN, LOW);  // LED an
-  delay(500);
+  delay(200);
   digitalWrite(LED_BUILTIN, HIGH); // LED aus
-  delay(500);
+  delay(200);
 }
