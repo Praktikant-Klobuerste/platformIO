@@ -5,53 +5,48 @@ on:
     types: [labeled]
 
 permissions:
-  contents: write       # Branch anlegen
-  issues: write         # Kommentar im Issue
-  pull-requests: write  # nur nötig, falls du die PR-Erstellung unten aktivierst
+  contents: write       # Branch erstellen
+  issues: write         # Kommentar schreiben
+  pull-requests: write  # nur nötig, wenn PR-Erstellung unten aktiviert wird
 
 jobs:
   create_issue_branch:
+    # Job läuft nur, wenn das passende Label gesetzt wurde
+    if: ${{ github.event.label.name == 'ready for dev' }}
     runs-on: ubuntu-latest
     steps:
       - name: Create branch from issue title (only if label matches)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # WICHTIG: nirgendwo 'const core = require("@actions/core")' deklarieren!
           script: |
-            // --- Guard: nur bei Label "ready for dev" (case-insensitive)
             const issue = context.payload.issue;
             const repo  = context.repo;
-            const labelName = (context.payload.label?.name || "").toLowerCase();
-            if (labelName !== "ready for dev") {
-              console.log(`Label "${labelName}" ist nicht "ready for dev" – überspringe.`);
-              return;
-            }
 
-            // --- Branch-Name bauen: issue-<nr>-<slug>
+            // Branch-Name bauen: issue-<nr>-<slug>
             function slugify(title) {
-              return title
-                // deutsche Umlaute zuerst "umschreiben"
+              return (title || "")
                 .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
-                // diakritische Zeichen entfernen
                 .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
                 .toLowerCase().trim()
-                .replace(/[^a-z0-9]+/g, "-")   // alles Nicht-Alphanum durch "-"
-                .replace(/^-+|-+$/g, "")       // Leading/Trailing "-" entfernen
-                .slice(0, 60);                 // Länge begrenzen
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+                .slice(0, 60);
             }
 
-            const slug = slugify(issue.title || "");
+            const slug = slugify(issue.title);
             const branchName = `issue-${issue.number}${slug ? '-' + slug : ''}`;
             const refName = `heads/${branchName}`;
 
-            // --- Default-Branch ermitteln (z. B. main/develop)
+            // Default-Branch ermitteln
             const { data: repoData } = await github.rest.repos.get({
               owner: repo.owner,
               repo: repo.repo
             });
             const baseBranch = repoData.default_branch;
 
-            // --- SHA des Base-Branches holen
+            // SHA des Base-Branches holen
             const { data: baseRef } = await github.rest.git.getRef({
               owner: repo.owner,
               repo: repo.repo,
@@ -59,7 +54,7 @@ jobs:
             });
             const baseSha = baseRef.object.sha;
 
-            // --- Prüfen, ob der Ziel-Branch bereits existiert
+            // Prüfen, ob Branch existiert
             let exists = true;
             try {
               await github.rest.git.getRef({
@@ -76,7 +71,7 @@ jobs:
               }
             }
 
-            // --- Branch anlegen, falls nicht vorhanden
+            // Branch anlegen, wenn nicht vorhanden
             if (!exists) {
               await github.rest.git.createRef({
                 owner: repo.owner,
@@ -84,10 +79,10 @@ jobs:
                 ref: `refs/${refName}`,
                 sha: baseSha
               });
-              console.log(`Branch ${branchName} wurde von ${baseBranch} erstellt.`);
+              console.log(`Branch ${branchName} von ${baseBranch} erstellt.`);
             }
 
-            // --- Kommentar im Issue mit Checkout-Anleitung
+            // Kommentar im Issue mit Checkout-Anleitung
             const comment = exists
               ? `🔁 Es existiert bereits ein Branch für dieses Issue:\n\n\`${branchName}\`\n\n**Checkout:**\n\`\`\`bash\ngit fetch origin\ngit switch ${branchName} || git checkout -b ${branchName} origin/${branchName}\n\`\`\`\n`
               : `🌱 Branch erstellt: \`${branchName}\`\n\n**Checkout lokal:**\n\`\`\`bash\ngit fetch origin\ngit checkout -b ${branchName} origin/${branchName}\n# oder mit neuerem Git:\n# git switch --track -c ${branchName} origin/${branchName}\n\`\`\`\n\n**Basis:** \`${baseBranch}\``;
@@ -99,7 +94,7 @@ jobs:
               body: comment
             });
 
-            // --- Optional: Draft-PR automatisch erstellen (auskommentiert lassen/entfernen, wenn nicht gewünscht)
+            // Optional: Draft-PR automatisch erstellen
             /*
             if (!exists) {
               await github.rest.pulls.create({
